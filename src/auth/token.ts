@@ -65,7 +65,19 @@ export class TokenProvider {
       },
     };
 
-    const result = await pca.acquireTokenByDeviceCode(request);
+    let result;
+    try {
+      result = await pca.acquireTokenByDeviceCode(request);
+    } catch (err) {
+      // When the prompter rejects we set request.cancel = true. MSAL responds by
+      // *throwing* `device_code_polling_cancelled` rather than resolving null, so
+      // we have to catch here to surface our friendlier error instead of MSAL's.
+      // BUT: if MSAL throws a real error (network, invalid tenant, expired code)
+      // after the prompter rejected, propagate THAT error so the user can see
+      // the actual failure. Only swap when MSAL's error is the cancellation we caused.
+      if (promptError && isPollingCancellationError(err)) throw promptError;
+      throw err;
+    }
 
     if (promptError) throw promptError;
     if (!result?.accessToken) {
@@ -74,4 +86,12 @@ export class TokenProvider {
     this.lastAcquisitionMethod = "device-code";
     return result.accessToken;
   }
+}
+
+function isPollingCancellationError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  // MSAL exposes the code on the error itself; some wrapper layers fold it into the message.
+  const code = (err as { errorCode?: unknown }).errorCode;
+  if (typeof code === "string" && code === "device_code_polling_cancelled") return true;
+  return /device_code_polling_cancelled/i.test(err.message);
 }

@@ -77,9 +77,11 @@ Optional flags you can append to `args` (after `"@bgorkem/outlook-mcp"`):
 
 > "List my Outlook inbox."
 
-The first time, Claude will show you a Microsoft sign-in URL with a code (an MCP elicitation prompt). Click it, sign in to your Outlook.com / Hotmail / Live account, approve the consent screen — and the inbox listing appears in the chat.
+The first request fails with a friendly **"Outlook sign-in required"** message that includes a Microsoft URL and an 8-character code. Open the link, paste the code, sign in to your Outlook.com / Hotmail / Live account, approve the consent screen, then ask Claude to retry — the inbox listing appears.
 
 Every subsequent request is silent — the refresh token in `~/.outlook-mcp/cache.json` (mode `0600`) handles it automatically.
+
+> **Why a two-step flow?** The MCP spec has an `elicitation/create` mechanism for in-chat prompts, but most clients (including Claude Desktop as of late 2025) don't yet advertise the capability. Until they do, embedding the sign-in URL in the tool's error response is the most portable approach. When the client *does* advertise elicitation, this server uses it automatically and the prompt appears inline.
 
 ### Reduce npx cold-start latency
 
@@ -87,7 +89,7 @@ Every subsequent request is silent — the refresh token in `~/.outlook-mcp/cach
 
 ```sh
 # Pin a version — npx resolves locally without hitting the registry
-npx -y @bgorkem/outlook-mcp@0.1.0
+npx -y @bgorkem/outlook-mcp@0.1.1
 
 # Or install once globally and use the bare command in your MCP config
 npm install -g @bgorkem/outlook-mcp

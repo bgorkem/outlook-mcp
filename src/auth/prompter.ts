@@ -44,14 +44,17 @@ export class McpElicitationPrompter implements Prompter {
 }
 
 export class NotSupportedPrompter implements Prompter {
-  async promptDeviceCode(_prompt: DeviceCodePrompt): Promise<void> {
+  async promptDeviceCode(prompt: DeviceCodePrompt): Promise<void> {
+    const expiresMin = Math.max(1, Math.round(prompt.expiresInSec / 60));
     throw new AuthRequiredError(
-      "Outlook authentication required.\n" +
-        "This MCP client does not support in-session sign-in prompts " +
-        "(it did not advertise the 'elicitation' capability).\n\n" +
-        "Run this once in a terminal, then retry your request:\n" +
-        "    npx -y @bgorkem/outlook-mcp --login\n\n" +
-        "Make sure OUTLOOK_MCP_CLIENT_ID is set in the same shell.",
+      "**Outlook sign-in required.**\n\n" +
+        `1. Open ${prompt.url} in your browser.\n` +
+        `2. Enter this code: **${prompt.code}**\n` +
+        `3. Sign in with your Outlook.com / Hotmail / Live account and approve the consent screen.\n` +
+        "4. After the browser shows 'You can close this tab', ask me to retry.\n\n" +
+        `(Code expires in ~${expiresMin} min. ` +
+        "If your MCP client supports the `elicitation` capability, this prompt would appear in-chat instead — most clients don't yet.)\n\n" +
+        "Alternative: run `npx -y @bgorkem/outlook-mcp --login` in a terminal once, then retry.",
     );
   }
 }

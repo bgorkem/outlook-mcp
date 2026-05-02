@@ -45,22 +45,31 @@ describe("StderrPrompter", () => {
 });
 
 describe("NotSupportedPrompter", () => {
-  it("throws AuthRequiredError with run-`--login` instructions", async () => {
+  it("throws AuthRequiredError that embeds the actual URL and code so the user can act from chat", async () => {
     const prompter = new NotSupportedPrompter();
     await expect(
       prompter.promptDeviceCode({
-        url: "https://example/link",
-        code: "X",
-        message: "x",
-        expiresInSec: 0,
+        url: "https://www.microsoft.com/link",
+        code: "AB1C2D3E",
+        message: "msal raw msg",
+        expiresInSec: 900,
       }),
     ).rejects.toBeInstanceOf(AuthRequiredError);
+
     try {
-      await prompter.promptDeviceCode({ url: "u", code: "c", message: "m", expiresInSec: 0 });
+      await prompter.promptDeviceCode({
+        url: "https://www.microsoft.com/link",
+        code: "AB1C2D3E",
+        message: "m",
+        expiresInSec: 900,
+      });
     } catch (e) {
       const err = e as AuthRequiredError;
+      expect(err.message).toContain("https://www.microsoft.com/link");
+      expect(err.message).toContain("AB1C2D3E");
+      expect(err.message).toMatch(/sign[- ]in/i);
+      // still mention the --login fallback for terminal users
       expect(err.message).toMatch(/--login/);
-      expect(err.message).toMatch(/elicitation/i);
     }
   });
 });
@@ -164,6 +173,65 @@ describe("TokenProvider", () => {
     });
     await expect(tokens.getAccessToken()).rejects.toBeInstanceOf(AuthRequiredError);
     expect(cancelSeen).toHaveBeenCalled();
+  });
+
+  it("propagates a real MSAL error (e.g., network failure) instead of swapping it for AuthRequiredError", async () => {
+    // If the prompter rejected AND MSAL then hits a real failure (network, invalid
+    // tenant, expired device code), users should see the actual MSAL error rather
+    // than our friendly auth-required message — losing the real diagnostic would
+    // make these failures impossible to debug.
+    const pca = {
+      getTokenCache: () => ({ getAllAccounts: async () => [] }),
+      acquireTokenSilent: async () => null,
+      acquireTokenByDeviceCode: async (req: any) => {
+        req.deviceCodeCallback({
+          message: "go to https://www.microsoft.com/link and enter ZZZZ9999",
+          expiresIn: 900,
+        });
+        await new Promise((r) => setTimeout(r, 5));
+        // Realistic: prompter rejected and set cancel, but the next poll already
+        // crashed with a network error before MSAL noticed the cancel flag.
+        const err = new Error("fetch failed: ECONNRESET");
+        (err as any).errorCode = "network_error";
+        throw err;
+      },
+    } as any;
+
+    const tokens = new TokenProvider({
+      pca,
+      scopes: ["Mail.Read"],
+      prompter: new NotSupportedPrompter(),
+    });
+    await expect(tokens.getAccessToken()).rejects.toThrow(/ECONNRESET/);
+  });
+
+  it("surfaces our AuthRequiredError even when MSAL throws device_code_polling_cancelled after cancel", async () => {
+    // Real MSAL behaviour: when request.cancel = true is set during polling, MSAL
+    // rejects acquireTokenByDeviceCode with a 'device_code_polling_cancelled' error
+    // rather than resolving null. The TokenProvider must catch that and rethrow our
+    // AuthRequiredError so the user sees the friendly message, not MSAL's raw error.
+    const pca = {
+      getTokenCache: () => ({ getAllAccounts: async () => [] }),
+      acquireTokenSilent: async () => null,
+      acquireTokenByDeviceCode: async (req: any) => {
+        req.deviceCodeCallback({
+          message: "go to https://www.microsoft.com/link and enter ZZZZ9999",
+          expiresIn: 900,
+        });
+        await new Promise((r) => setTimeout(r, 5));
+        // Mimic MSAL: throw, do not return null, on cancellation
+        throw new Error(
+          "device_code_polling_cancelled: Caller has cancelled token endpoint polling",
+        );
+      },
+    } as any;
+
+    const tokens = new TokenProvider({
+      pca,
+      scopes: ["Mail.Read"],
+      prompter: new NotSupportedPrompter(),
+    });
+    await expect(tokens.getAccessToken()).rejects.toBeInstanceOf(AuthRequiredError);
   });
 
   it("deduplicates concurrent first-time acquisitions (one prompt for N callers)", async () => {
