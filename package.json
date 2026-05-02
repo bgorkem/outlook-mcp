@@ -1,6 +1,6 @@
 {
   "name": "@bgorkem/outlook-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP server for personal Microsoft account mailboxes (Outlook.com / Hotmail / Live) via Microsoft Graph",
   "type": "module",
   "license": "MIT",

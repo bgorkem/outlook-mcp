@@ -65,7 +65,16 @@ export class TokenProvider {
       },
     };
 
-    const result = await pca.acquireTokenByDeviceCode(request);
+    let result;
+    try {
+      result = await pca.acquireTokenByDeviceCode(request);
+    } catch (err) {
+      // When the prompter rejects we set request.cancel = true. MSAL responds by
+      // *throwing* `device_code_polling_cancelled` rather than resolving null, so
+      // we have to catch here to surface our friendlier error instead of MSAL's.
+      if (promptError) throw promptError;
+      throw err;
+    }
 
     if (promptError) throw promptError;
     if (!result?.accessToken) {
