@@ -17,7 +17,7 @@ export interface TokenProviderOptions {
 }
 
 export class TokenProvider {
-  private silentInflight: Promise<string> | null = null;
+  private acquireInflight: Promise<string> | null = null;
   private backgroundFlow: Promise<AuthenticationResult | null> | null = null;
   private lastPrompt: DeviceCodePrompt | null = null;
   private readonly prompter: Prompter;
@@ -28,11 +28,11 @@ export class TokenProvider {
   }
 
   async getAccessToken(): Promise<string> {
-    if (this.silentInflight) return this.silentInflight;
-    this.silentInflight = this.acquire().finally(() => {
-      this.silentInflight = null;
+    if (this.acquireInflight) return this.acquireInflight;
+    this.acquireInflight = this.acquire().finally(() => {
+      this.acquireInflight = null;
     });
-    return this.silentInflight;
+    return this.acquireInflight;
   }
 
   private async acquire(): Promise<string> {
@@ -105,9 +105,11 @@ export class TokenProvider {
       );
     }
 
-    let promptResolve: (p: DeviceCodePrompt) => void;
-    const promptReady = new Promise<DeviceCodePrompt>((r) => {
-      promptResolve = r;
+    let promptResolve!: (p: DeviceCodePrompt) => void;
+    let promptReject!: (err: unknown) => void;
+    const promptReady = new Promise<DeviceCodePrompt>((res, rej) => {
+      promptResolve = res;
+      promptReject = rej;
     });
 
     const flow = pca.acquireTokenByDeviceCode({
@@ -135,6 +137,11 @@ export class TokenProvider {
         }
       })
       .catch((err) => {
+        // If MSAL rejected before deviceCodeCallback fired (early misconfiguration,
+        // network failure, etc.), unblock the awaiter so the tool call returns the
+        // real MSAL error instead of hanging on promptReady forever.
+        // Once promptReady is already settled, this reject is a no-op.
+        promptReject(err);
         const reason = err instanceof Error ? err.message : String(err);
         process.stderr.write(`[outlook-mcp] background sign-in failed: ${reason}\n`);
       })

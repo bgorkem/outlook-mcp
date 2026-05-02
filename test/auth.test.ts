@@ -55,6 +55,7 @@ describe("Prompter contracts", () => {
       message: "ignored",
       expiresInSec: 900,
     });
+    expect(elicitInput).toHaveBeenCalledOnce();
     const arg = elicitInput.mock.calls[0]?.[0] as any;
     expect(arg.mode).toBe("url");
     expect(arg.url).toBe("https://www.microsoft.com/link");
@@ -281,6 +282,29 @@ describe("TokenProvider — non-interactive (NotSupported) path with background 
 
     // Second call: silent path now hits the populated cache
     expect(await tokens.getAccessToken()).toBe("silent-after-bg");
+  });
+
+  it("when MSAL rejects before deviceCodeCallback fires, the underlying error propagates instead of hanging", async () => {
+    // Realistic failure: invalid client id, network down, etc — MSAL throws immediately
+    // before ever firing the device-code callback. Without the reject path on promptReady,
+    // the await would hang forever waiting for a callback that will never come.
+    const pca = {
+      getTokenCache: () => ({ getAllAccounts: async () => [] }),
+      acquireTokenSilent: async () => null,
+      acquireTokenByDeviceCode: async () => {
+        throw new Error("invalid_client: AADSTS700016 application not found");
+      },
+    } as any;
+
+    const tokens = new TokenProvider({
+      pca,
+      scopes: ["Mail.Read"],
+      prompter: new NotSupportedPrompter(),
+    });
+
+    // The exact error MSAL threw should propagate — NOT an AuthRequiredError, because
+    // we never got far enough to surface a URL+code, and not a hang either.
+    await expect(tokens.getAccessToken()).rejects.toThrow(/AADSTS700016/);
   });
 
   it("when background polling fails (e.g., user never signed in), a retry starts a fresh device-code flow", async () => {
