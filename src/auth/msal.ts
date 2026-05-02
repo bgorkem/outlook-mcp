@@ -12,8 +12,8 @@ export function readEnv(): MsalEnv {
   if (!clientId) {
     throw new Error(
       "OUTLOOK_MCP_CLIENT_ID env var is required. " +
-        "Register an Azure AD app (multi-tenant + personal MS accounts, public client) " +
-        "and pass its Application (client) ID. See README.md.",
+        "Register an Azure AD app (personal accounts only, public client with device-code flow enabled) " +
+        "and pass its Application (client) ID. See README.md for the full step-by-step.",
     );
   }
   const authority =
