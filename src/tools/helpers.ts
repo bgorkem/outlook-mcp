@@ -3,6 +3,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z, type ZodTypeAny } from "zod";
 import { appendAudit } from "../security/audit.js";
 import { GraphError } from "../graph/client.js";
+import { AuthRequiredError } from "../auth/errors.js";
 
 export type ToolHandler<S extends ZodTypeAny> = (
   args: z.infer<S>,
@@ -70,7 +71,9 @@ export function textResult(text: string): CallToolResult {
 
 export function errorResult(err: unknown): CallToolResult {
   let msg: string;
-  if (err instanceof GraphError) {
+  if (err instanceof AuthRequiredError) {
+    msg = err.message;
+  } else if (err instanceof GraphError) {
     msg = `Microsoft Graph error (${err.status}${err.code ? ` ${err.code}` : ""}): ${err.message}`;
   } else if (err instanceof Error) {
     msg = err.message;

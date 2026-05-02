@@ -11,8 +11,9 @@ export class FileCachePlugin implements ICachePlugin {
       const data = await fs.readFile(this.path, "utf8");
       if (data.length > 0) ctx.tokenCache.deserialize(data);
     } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
       process.stderr.write(
-        `[outlook-mcp] failed to read token cache at ${this.path}: ${(err as Error).message}\n`,
+        `[outlook-mcp] failed to read token cache at ${this.path}: ${reason}\n`,
       );
     }
   }

@@ -1,19 +1,24 @@
-import type { PublicClientApplication } from "@azure/msal-node";
+import type { DeviceCodeRequest, PublicClientApplication } from "@azure/msal-node";
+import { AuthError } from "./errors.js";
+import { parseMsalMessage, StderrPrompter, type Prompter } from "./prompter.js";
 
-export class AuthError extends Error {}
+export { AuthError, AuthRequiredError } from "./errors.js";
+export type AcquisitionMethod = "silent" | "device-code";
 
 export interface TokenProviderOptions {
   pca: PublicClientApplication;
   scopes: string[];
+  prompter?: Prompter;
 }
-
-export type AcquisitionMethod = "silent" | "device-code";
 
 export class TokenProvider {
   private inflight: Promise<string> | null = null;
+  private readonly prompter: Prompter;
   lastAcquisitionMethod: AcquisitionMethod | null = null;
 
-  constructor(private readonly opts: TokenProviderOptions) {}
+  constructor(private readonly opts: TokenProviderOptions) {
+    this.prompter = opts.prompter ?? new StderrPrompter();
+  }
 
   async getAccessToken(): Promise<string> {
     if (this.inflight) return this.inflight;
@@ -36,19 +41,33 @@ export class TokenProvider {
           return silent.accessToken;
         }
       } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
         process.stderr.write(
-          `[outlook-mcp] silent token acquisition failed (${(err as Error).message}); falling back to device code\n`,
+          `[outlook-mcp] silent token acquisition failed (${reason}); falling back to device code\n`,
         );
       }
     }
 
-    const result = await pca.acquireTokenByDeviceCode({
+    let promptError: Error | null = null;
+    const request: DeviceCodeRequest = {
       scopes,
       deviceCodeCallback: (response) => {
-        process.stderr.write(`\n[outlook-mcp] ${response.message}\n\n`);
+        const prompt = parseMsalMessage(response.message, response.expiresIn);
+        // Fire the prompter; MSAL keeps polling regardless of when the prompt's
+        // promise settles. If the prompter rejects (e.g. NotSupportedPrompter),
+        // cancel the device-code wait so we surface the error promptly.
+        Promise.resolve()
+          .then(() => this.prompter.promptDeviceCode(prompt))
+          .catch((err: Error) => {
+            promptError = err;
+            request.cancel = true;
+          });
       },
-    });
+    };
 
+    const result = await pca.acquireTokenByDeviceCode(request);
+
+    if (promptError) throw promptError;
     if (!result?.accessToken) {
       throw new AuthError("Device code flow returned no access token");
     }
