@@ -175,6 +175,36 @@ describe("TokenProvider", () => {
     expect(cancelSeen).toHaveBeenCalled();
   });
 
+  it("propagates a real MSAL error (e.g., network failure) instead of swapping it for AuthRequiredError", async () => {
+    // If the prompter rejected AND MSAL then hits a real failure (network, invalid
+    // tenant, expired device code), users should see the actual MSAL error rather
+    // than our friendly auth-required message — losing the real diagnostic would
+    // make these failures impossible to debug.
+    const pca = {
+      getTokenCache: () => ({ getAllAccounts: async () => [] }),
+      acquireTokenSilent: async () => null,
+      acquireTokenByDeviceCode: async (req: any) => {
+        req.deviceCodeCallback({
+          message: "go to https://www.microsoft.com/link and enter ZZZZ9999",
+          expiresIn: 900,
+        });
+        await new Promise((r) => setTimeout(r, 5));
+        // Realistic: prompter rejected and set cancel, but the next poll already
+        // crashed with a network error before MSAL noticed the cancel flag.
+        const err = new Error("fetch failed: ECONNRESET");
+        (err as any).errorCode = "network_error";
+        throw err;
+      },
+    } as any;
+
+    const tokens = new TokenProvider({
+      pca,
+      scopes: ["Mail.Read"],
+      prompter: new NotSupportedPrompter(),
+    });
+    await expect(tokens.getAccessToken()).rejects.toThrow(/ECONNRESET/);
+  });
+
   it("surfaces our AuthRequiredError even when MSAL throws device_code_polling_cancelled after cancel", async () => {
     // Real MSAL behaviour: when request.cancel = true is set during polling, MSAL
     // rejects acquireTokenByDeviceCode with a 'device_code_polling_cancelled' error
