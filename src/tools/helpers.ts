@@ -52,9 +52,15 @@ export function registerAuditedTool<S extends ZodTypeAny>(
 }
 
 export function jsonResult(data: unknown, text?: string): CallToolResult {
+  // MCP requires structuredContent to be an object, not a primitive or array.
+  const structured: Record<string, unknown> = Array.isArray(data)
+    ? { items: data, count: data.length }
+    : data && typeof data === "object"
+      ? (data as Record<string, unknown>)
+      : { value: data };
   return {
     content: [{ type: "text", text: text ?? JSON.stringify(data, null, 2) }],
-    structuredContent: data as Record<string, unknown>,
+    structuredContent: structured,
   };
 }
 
