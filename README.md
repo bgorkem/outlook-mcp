@@ -209,7 +209,7 @@ git clone https://github.com/bgorkem/outlook-mcp.git
 cd outlook-mcp
 npm install
 npm run build
-npm test                # 30 vitest specs
+npm test                # 35 vitest specs
 ```
 
 Then run locally instead of via npx:
@@ -219,6 +219,38 @@ OUTLOOK_MCP_CLIENT_ID=<your-app-id> node dist/index.js --login
 ```
 
 In your MCP client config, replace `"command": "npx", "args": ["-y", "@bgorkem/outlook-mcp"]` with `"command": "node", "args": ["/absolute/path/to/outlook-mcp/dist/index.js"]`.
+
+## Releases
+
+This repo uses [`.github/workflows/release.yml`](.github/workflows/release.yml) to publish to npm automatically when a `v*` tag is pushed. The workflow runs full CI (typecheck, tests, build), verifies that `package.json` version matches the tag, publishes with `--provenance` via OIDC trusted publishing (no `NPM_TOKEN` secret), and creates a GitHub Release with auto-generated notes.
+
+### One-time setup
+
+OIDC trusted publishing requires a one-time configuration on npmjs.com pointing at this repo + workflow:
+
+1. Visit https://www.npmjs.com/package/@bgorkem/outlook-mcp/access
+2. Click the **Settings** tab
+3. Under **Trusted Publisher**, click **Add publisher**
+4. Choose **GitHub Actions** and fill:
+   - Org/user: `bgorkem`
+   - Repository: `outlook-mcp`
+   - Workflow filename: `release.yml`
+   - Environment: leave blank
+5. Save
+
+Until that's done, `npm publish` from the workflow will fail with *"Trusted Publisher is not configured for this package"*. The very first publish of any package always has to be done manually from a logged-in machine; trusted publishing only applies once the package exists.
+
+### Cutting a release
+
+```sh
+# bump version, commit, and tag in one step
+npm version patch -m "Release v%s"     # patch | minor | major
+
+# push the commit AND the new tag
+git push --follow-tags
+```
+
+The workflow auto-runs on the tag push: ~30s later you have a new npm version and a GitHub Release. To re-fire a release for an existing tag (e.g. after fixing a workflow issue), use **Actions → Release → Run workflow** and supply the tag name.
 
 ## License
 

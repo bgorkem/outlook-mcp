@@ -1,32 +1,119 @@
+# Tag-triggered release workflow.
+#
+# To use this for the first time you must ALSO configure an OIDC Trusted
+# Publisher on npmjs.com pointing at this exact workflow:
+#   https://www.npmjs.com/package/@bgorkem/outlook-mcp/access
+#   -> Settings tab -> Trusted Publisher -> Add publisher (GitHub Actions)
+#       Org/user:  bgorkem
+#       Repo:      outlook-mcp
+#       Workflow:  release.yml
+#       Environment: (leave blank)
+#
+# Until that's set, npm publish will fail with "Trusted Publisher is not
+# configured for this package". The first publish of a package always has
+# to be done manually from a logged-in machine; trusted publishing only
+# works once the package exists.
+#
+# Release flow once OIDC is wired up:
+#
+#   npm version patch -m "Release v%s"   # bumps + commits + tags
+#   git push --follow-tags               # pushes the commit AND the new tag
+#
+# This workflow then: runs full CI, verifies tag matches package.json,
+# publishes to npm with --provenance, and creates a GitHub Release with
+# auto-generated notes.
+
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing git tag to (re)release, e.g. v0.1.2"
+        required: true
+        type: string
 
 jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      id-token: write
+      contents: write       # required to create a GitHub Release
+      id-token: write       # required for OIDC trusted publishing to npm
     steps:
+      - name: Resolve ref
+        id: ref
+        env:
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+          PUSH_REF: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            REF="$DISPATCH_TAG"
+          else
+            REF="$PUSH_REF"
+          fi
+          if [ -z "$REF" ]; then
+            echo "::error::Could not resolve a tag from event $EVENT_NAME"
+            exit 1
+          fi
+          echo "tag=$REF" >> "$GITHUB_OUTPUT"
+          echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.ref.outputs.tag }}
+          fetch-depth: 0    # full history for the auto-generated release notes
+
       - uses: actions/setup-node@v5
         with:
           node-version: 24.x
           registry-url: "https://registry.npmjs.org"
           cache: npm
+
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+
       - name: Verify package version matches git tag
         run: |
           PKG=$(node -p "require('./package.json').version")
-          TAG="${GITHUB_REF_NAME#v}"
+          TAG="${{ steps.ref.outputs.version }}"
           if [ "$PKG" != "$TAG" ]; then
             echo "::error::Package version $PKG does not match git tag $TAG"
             exit 1
           fi
-      - run: npm publish --provenance --access public
+
+      - name: Check if version already exists on npm
+        id: registry
+        env:
+          VERSION: ${{ steps.ref.outputs.version }}
+        run: |
+          if npm view "@bgorkem/outlook-mcp@$VERSION" version >/dev/null 2>&1; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::@bgorkem/outlook-mcp@$VERSION is already on npm — skipping publish (Release step will still run)"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        if: steps.registry.outputs.already_published != 'true'
+        run: npm publish --provenance --access public
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ref.outputs.tag }}
+          name: ${{ steps.ref.outputs.tag }}
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          body: |
+            Published as [`@bgorkem/outlook-mcp@${{ steps.ref.outputs.version }}`](https://www.npmjs.com/package/@bgorkem/outlook-mcp/v/${{ steps.ref.outputs.version }}) on npm with provenance.
+
+            ## Install
+
+            ```sh
+            npx -y @bgorkem/outlook-mcp@${{ steps.ref.outputs.version }} --help
+            ```
