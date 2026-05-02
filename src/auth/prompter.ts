@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { AuthRequiredError } from "./errors.js";
 
 export interface DeviceCodePrompt {
   url: string;
@@ -10,16 +9,30 @@ export interface DeviceCodePrompt {
 }
 
 export interface Prompter {
+  /**
+   * True if this prompter can hold the user-facing UI open while MSAL polls
+   * to completion (e.g. an interactive terminal, an in-chat elicitation).
+   * False if the prompter has no way to await the user (e.g. an MCP client
+   * that doesn't advertise the elicitation capability) — in that case
+   * TokenProvider throws AuthRequiredError immediately and lets MSAL keep
+   * polling in the background.
+   */
+  readonly supportsInteractiveAwait: boolean;
+
   promptDeviceCode(prompt: DeviceCodePrompt): Promise<void>;
 }
 
 export class StderrPrompter implements Prompter {
+  readonly supportsInteractiveAwait = true;
+
   async promptDeviceCode(prompt: DeviceCodePrompt): Promise<void> {
     process.stderr.write(`\n[outlook-mcp] ${prompt.message}\n\n`);
   }
 }
 
 export class McpElicitationPrompter implements Prompter {
+  readonly supportsInteractiveAwait = true;
+
   constructor(private readonly server: McpServer) {}
 
   async promptDeviceCode(prompt: DeviceCodePrompt): Promise<void> {
@@ -44,18 +57,12 @@ export class McpElicitationPrompter implements Prompter {
 }
 
 export class NotSupportedPrompter implements Prompter {
-  async promptDeviceCode(prompt: DeviceCodePrompt): Promise<void> {
-    const expiresMin = Math.max(1, Math.round(prompt.expiresInSec / 60));
-    throw new AuthRequiredError(
-      "**Outlook sign-in required.**\n\n" +
-        `1. Open ${prompt.url} in your browser.\n` +
-        `2. Enter this code: **${prompt.code}**\n` +
-        `3. Sign in with your Outlook.com / Hotmail / Live account and approve the consent screen.\n` +
-        "4. After the browser shows 'You can close this tab', ask me to retry.\n\n" +
-        `(Code expires in ~${expiresMin} min. ` +
-        "If your MCP client supports the `elicitation` capability, this prompt would appear in-chat instead — most clients don't yet.)\n\n" +
-        "Alternative: run `npx -y @bgorkem/outlook-mcp --login` in a terminal once, then retry.",
-    );
+  readonly supportsInteractiveAwait = false;
+
+  async promptDeviceCode(_prompt: DeviceCodePrompt): Promise<void> {
+    // Intentionally a no-op. When supportsInteractiveAwait is false, the
+    // TokenProvider throws AuthRequiredError directly with the URL+code; we
+    // never invoke this method. It exists only to satisfy the interface.
   }
 }
 

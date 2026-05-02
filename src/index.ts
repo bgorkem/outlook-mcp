@@ -104,7 +104,7 @@ async function main(): Promise<void> {
     return;
   }
   if (flags.showVersion) {
-    process.stdout.write("outlook-mcp 0.1.1\n");
+    process.stdout.write("outlook-mcp 0.1.2\n");
     return;
   }
   if (flags.login) {

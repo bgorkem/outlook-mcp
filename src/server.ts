@@ -30,7 +30,7 @@ export function buildServer(opts: ServerOptions): BuiltServer {
 
   const server = new McpServer({
     name: "outlook-mcp",
-    version: "0.1.1",
+    version: "0.1.2",
   });
 
   // Auth is wired lazily because client capabilities (specifically `elicitation`)
