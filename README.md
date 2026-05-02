@@ -41,109 +41,70 @@ Local stdio MCP server that lets Claude (or any MCP client) read and act on a **
 
 ## Setup
 
+Three steps. No `git clone`, no separate sign-in command — the first time you ask Claude to do something with email, Claude Desktop shows you a sign-in prompt.
+
 ### 1. Register an Azure AD app (one-time, ~3 min)
 
-1. <https://portal.azure.com> → **App registrations** → **New registration**
-2. **Name:** `outlook-mcp` (or anything you like)
-3. **Supported account types:** **Personal Microsoft accounts only** (or *Accounts in any organizational directory and personal Microsoft accounts* if you also need work/school sign-in)
-4. **Redirect URI:** leave blank
-5. Click **Register**
+See **[Azure setup](#azure-setup)** at the bottom for click-by-click instructions. The output is one value: your **Application (client) ID** (a UUID).
 
-Then, in your new app:
+### 2. Add to your MCP client config
 
-6. **Manage → Authentication** → scroll to *Advanced settings* → toggle **Allow public client flows: Yes** → **Save**
-7. **Manage → API permissions** → **+ Add a permission** → **Microsoft Graph** → **Delegated permissions** → add the permissions you need:
-   - **`offline_access`** — always (refresh tokens)
-   - **`Mail.Read`** — required for read tools (always present)
-   - **`Mail.ReadWrite`** — required only if you want draft / move / mark / flag tools. Skip it if you only ever plan to run with `--read-only`
-8. From the **Overview** page, copy the **Application (client) ID** — you'll need it in step 3
-
-No client secret is needed (public client + device-code flow).
-
-> **Personal accounts:** consent happens at sign-in; no admin action needed. Don't click "Grant admin consent for *Default Directory*".
->
-> **Work / school (Entra) accounts:** if you chose the multi-tenant option in step 3, your tenant admin may need to grant the delegated Graph permissions, and you'll need to set `OUTLOOK_MCP_AUTHORITY=https://login.microsoftonline.com/common` (the default `consumers` authority rejects work accounts).
-
-### 2. Install
-
-```sh
-git clone https://github.com/bgorkem/outlook-mcp.git
-cd outlook-mcp
-npm install
-npm run build
-```
-
-Or once published:
-
-```sh
-npm install -g outlook-mcp
-```
-
-### 3. Sign in (one-time, takes ~30 seconds)
-
-Run the binary with `--login` — this performs a one-shot device-code sign-in and exits. No MCP client needed yet.
-
-```sh
-OUTLOOK_MCP_CLIENT_ID=<your-app-id> node dist/index.js --login
-```
-
-> **Least-privilege variant:** if you'll only ever run the server with `--read-only` (and only registered `Mail.Read` in step 1.7), pass the same flag to `--login` so consent is requested for the narrower scope set:
->
-> ```sh
-> OUTLOOK_MCP_CLIENT_ID=<your-app-id> node dist/index.js --login --read-only
-> ```
-
-You'll see something like:
-
-```
-[outlook-mcp] acquiring token (silent first; device code if needed). Scopes: Mail.ReadWrite, offline_access
-
-[outlook-mcp] To sign in, use a web browser to open the page https://www.microsoft.com/link
-              and enter the code AB1C2D3E to authenticate.
-```
-
-1. Open the URL in any browser
-2. Paste the **8-character code**
-3. Sign in with your **Outlook.com / Hotmail / Live** account
-4. On the consent screen, approve the requested permissions
-
-When the browser shows "You can close this tab", the terminal completes with:
-
-```
-[outlook-mcp] sign-in complete. Token cache location: /Users/you/.outlook-mcp/cache.json
-[outlook-mcp] you can now wire this server to your MCP client.
-```
-
-The token cache (`~/.outlook-mcp/cache.json`, mode `0600`) holds a refresh token — subsequent runs acquire access tokens silently. Re-run `--login` any time you want to confirm the cache is healthy or refresh consent; it'll report "silent acquisition succeeded" if no interaction is needed.
-
-> **Globally installed?** If you used `npm install -g outlook-mcp`, replace `node dist/index.js --login` with just `outlook-mcp --login` throughout this guide.
-
-### 4. Wire to your MCP client
-
-Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+**Claude Desktop** — edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 
 ```jsonc
 {
   "mcpServers": {
     "outlook": {
-      "command": "node",
-      "args": ["/absolute/path/to/outlook-mcp/dist/index.js"],
-      "env": {
-        "OUTLOOK_MCP_CLIENT_ID": "<your-app-id>"
-      }
+      "command": "npx",
+      "args": ["-y", "@bgorkem/outlook-mcp"],
+      "env": { "OUTLOOK_MCP_CLIENT_ID": "<your-app-id>" }
     }
   }
 }
 ```
 
-Add `"--enable-organize"` to `args` to expose move/mark/flag/folder tools.
-Add `"--read-only"` to register only read tools (and request only `Mail.Read`).
-
-Claude Code:
+**Claude Code:**
 
 ```sh
-claude mcp add outlook -e OUTLOOK_MCP_CLIENT_ID=<your-app-id> -- node /absolute/path/to/outlook-mcp/dist/index.js
+claude mcp add outlook -e OUTLOOK_MCP_CLIENT_ID=<your-app-id> -- npx -y @bgorkem/outlook-mcp
 ```
+
+Optional flags you can append to `args` (after `"@bgorkem/outlook-mcp"`):
+- `"--read-only"` — only read tools, requests only `Mail.Read`
+- `"--enable-organize"` — additionally expose move/mark/flag/folder tools
+
+### 3. Restart your MCP client and ask Claude to do something with email
+
+> "List my Outlook inbox."
+
+The first time, Claude will show you a Microsoft sign-in URL with a code (an MCP elicitation prompt). Click it, sign in to your Outlook.com / Hotmail / Live account, approve the consent screen — and the inbox listing appears in the chat.
+
+Every subsequent request is silent — the refresh token in `~/.outlook-mcp/cache.json` (mode `0600`) handles it automatically.
+
+### Reduce npx cold-start latency
+
+`npx -y @bgorkem/outlook-mcp` re-resolves the package on every MCP server start (a few hundred ms even on a cache hit). Two ways to make startup instant:
+
+```sh
+# Pin a version — npx resolves locally without hitting the registry
+npx -y @bgorkem/outlook-mcp@0.1.0
+
+# Or install once globally and use the bare command in your MCP config
+npm install -g @bgorkem/outlook-mcp
+# then in MCP config:  "command": "outlook-mcp", "args": []
+```
+
+### Manual sign-in (advanced / fallback)
+
+If your MCP client doesn't support [elicitation](https://modelcontextprotocol.io/specification/server/elicitation/) (the in-chat prompt mechanism), tools will return an error asking you to run this once in a terminal:
+
+```sh
+OUTLOOK_MCP_CLIENT_ID=<your-app-id> npx -y @bgorkem/outlook-mcp --login
+```
+
+Same flow — you'll see a URL + 8-char code on stderr, sign in, done. Token cache lands in the same place. Append `--read-only` if you only registered `Mail.Read` in step 1.
+
+This is also handy for verifying cache health: if it prints "silent acquisition succeeded", auth is working without re-prompting.
 
 ## Configuration
 
@@ -209,6 +170,51 @@ Manual end-to-end (after running `--login` once):
 - Mail only — no calendar, contacts, or attachments.
 - Single account.
 - HTML rendering on read is intentionally lossy (we want safe text, not pixel-perfect output).
+
+## Azure setup
+
+Click-by-click instructions for step 1 of [Setup](#setup).
+
+1. <https://portal.azure.com> → **App registrations** → **New registration**
+2. **Name:** `outlook-mcp` (or anything you like)
+3. **Supported account types:** **Personal Microsoft accounts only** (or *Accounts in any organizational directory and personal Microsoft accounts* if you also need work/school sign-in)
+4. **Redirect URI:** leave blank
+5. Click **Register**
+
+Then, in your new app:
+
+6. **Manage → Authentication** → scroll to *Advanced settings* → toggle **Allow public client flows: Yes** → **Save**
+7. **Manage → API permissions** → **+ Add a permission** → **Microsoft Graph** → **Delegated permissions** → add the permissions you need:
+   - **`offline_access`** — always (refresh tokens)
+   - **`Mail.Read`** — required for read tools (always present)
+   - **`Mail.ReadWrite`** — required only if you want draft / move / mark / flag tools. Skip it if you only ever plan to run with `--read-only`
+8. From the **Overview** page, copy the **Application (client) ID** — that's the value for `OUTLOOK_MCP_CLIENT_ID` in step 2
+
+No client secret is needed (public client + device-code flow).
+
+> **Personal accounts:** consent happens at sign-in; no admin action needed. Don't click "Grant admin consent for *Default Directory*".
+>
+> **Work / school (Entra) accounts:** if you chose the multi-tenant option in step 3, your tenant admin may need to grant the delegated Graph permissions, and you'll need to set `OUTLOOK_MCP_AUTHORITY=https://login.microsoftonline.com/common` (the default `consumers` authority rejects work accounts).
+
+## Development
+
+Building from source for contributors:
+
+```sh
+git clone https://github.com/bgorkem/outlook-mcp.git
+cd outlook-mcp
+npm install
+npm run build
+npm test                # 30 vitest specs
+```
+
+Then run locally instead of via npx:
+
+```sh
+OUTLOOK_MCP_CLIENT_ID=<your-app-id> node dist/index.js --login
+```
+
+In your MCP client config, replace `"command": "npx", "args": ["-y", "@bgorkem/outlook-mcp"]` with `"command": "node", "args": ["/absolute/path/to/outlook-mcp/dist/index.js"]`.
 
 ## License
 

@@ -1,5 +1,5 @@
 {
-  "name": "outlook-mcp",
+  "name": "@bgorkem/outlook-mcp",
   "version": "0.1.0",
   "description": "MCP server for personal Microsoft account mailboxes (Outlook.com / Hotmail / Live) via Microsoft Graph",
   "type": "module",
@@ -46,6 +46,13 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/bgorkem/outlook-mcp.git"
+  },
+  "homepage": "https://github.com/bgorkem/outlook-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/bgorkem/outlook-mcp/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "author": "bgorkem"
 }

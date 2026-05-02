@@ -1,4 +1,6 @@
-import type { TokenProvider } from "../auth/token.js";
+export interface TokenSource {
+  getAccessToken(): Promise<string>;
+}
 
 export class GraphError extends Error {
   constructor(
@@ -22,7 +24,7 @@ const BASE = "https://graph.microsoft.com/v1.0";
 const MAX_RETRIES = 3;
 
 export class GraphClient {
-  constructor(private readonly tokens: TokenProvider) {}
+  constructor(private readonly tokens: TokenSource) {}
 
   async request<T = unknown>(path: string, opts: RequestOptions = {}): Promise<T> {
     const method = opts.method ?? "GET";
