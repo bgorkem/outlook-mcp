@@ -44,8 +44,20 @@ jobs:
     steps:
       - name: Resolve ref
         id: ref
+        env:
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+          PUSH_REF: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          REF="${{ inputs.tag || github.ref_name }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            REF="$DISPATCH_TAG"
+          else
+            REF="$PUSH_REF"
+          fi
+          if [ -z "$REF" ]; then
+            echo "::error::Could not resolve a tag from event $EVENT_NAME"
+            exit 1
+          fi
           echo "tag=$REF" >> "$GITHUB_OUTPUT"
           echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
 
@@ -74,7 +86,20 @@ jobs:
             exit 1
           fi
 
+      - name: Check if version already exists on npm
+        id: registry
+        env:
+          VERSION: ${{ steps.ref.outputs.version }}
+        run: |
+          if npm view "@bgorkem/outlook-mcp@$VERSION" version >/dev/null 2>&1; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::@bgorkem/outlook-mcp@$VERSION is already on npm — skipping publish (Release step will still run)"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to npm
+        if: steps.registry.outputs.already_published != 'true'
         run: npm publish --provenance --access public
 
       - name: Create GitHub Release
