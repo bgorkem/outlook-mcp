@@ -52,12 +52,17 @@ Local stdio MCP server that lets Claude (or any MCP client) read and act on a **
 Then, in your new app:
 
 6. **Manage → Authentication** → scroll to *Advanced settings* → toggle **Allow public client flows: Yes** → **Save**
-7. **Manage → API permissions** → **+ Add a permission** → **Microsoft Graph** → **Delegated permissions** → check **`Mail.Read`**, **`Mail.ReadWrite`**, **`offline_access`** → **Add permissions**
+7. **Manage → API permissions** → **+ Add a permission** → **Microsoft Graph** → **Delegated permissions** → add the permissions you need:
+   - **`offline_access`** — always (refresh tokens)
+   - **`Mail.Read`** — required for read tools (always present)
+   - **`Mail.ReadWrite`** — required only if you want draft / move / mark / flag tools. Skip it if you only ever plan to run with `--read-only`
 8. From the **Overview** page, copy the **Application (client) ID** — you'll need it in step 3
 
-No client secret is needed (public client + device-code flow). Do **not** click "Grant admin consent" — personal accounts handle consent at sign-in.
+No client secret is needed (public client + device-code flow).
 
-> If you chose the multi-tenant option in step 3, also set `OUTLOOK_MCP_AUTHORITY=https://login.microsoftonline.com/common` later. Default authority targets personal accounts only.
+> **Personal accounts:** consent happens at sign-in; no admin action needed. Don't click "Grant admin consent for *Default Directory*".
+>
+> **Work / school (Entra) accounts:** if you chose the multi-tenant option in step 3, your tenant admin may need to grant the delegated Graph permissions, and you'll need to set `OUTLOOK_MCP_AUTHORITY=https://login.microsoftonline.com/common` (the default `consumers` authority rejects work accounts).
 
 ### 2. Install
 
@@ -81,6 +86,12 @@ Run the binary with `--login` — this performs a one-shot device-code sign-in a
 ```sh
 OUTLOOK_MCP_CLIENT_ID=<your-app-id> node dist/index.js --login
 ```
+
+> **Least-privilege variant:** if you'll only ever run the server with `--read-only` (and only registered `Mail.Read` in step 1.7), pass the same flag to `--login` so consent is requested for the narrower scope set:
+>
+> ```sh
+> OUTLOOK_MCP_CLIENT_ID=<your-app-id> node dist/index.js --login --read-only
+> ```
 
 You'll see something like:
 
@@ -188,9 +199,9 @@ Manual end-to-end (after running `--login` once):
 | Symptom | Fix |
 |---|---|
 | `OUTLOOK_MCP_CLIENT_ID env var is required` | Pass it via the `-e` flag in your MCP client config, or `export` it in the shell |
-| Browser says "We can't sign you in" or `AADSTS50020` | App registration's *Supported account types* didn't include personal accounts — re-do step 1.3 |
-| `AADSTS65001: consent required` | You closed the browser before approving consent. Re-run `--login` and click **Accept** |
-| Graph returns `InvalidAuthenticationToken` after weeks of inactivity | Refresh token expired. Delete `~/.outlook-mcp/cache.json` and re-run `--login` |
+| Browser says "We can't sign you in" or `AADSTS50020` | Two common causes: **(a)** signing in with a work/school account against the default `consumers` authority — set `OUTLOOK_MCP_AUTHORITY=https://login.microsoftonline.com/common` and ensure the app registration's *Supported account types* includes Entra tenants; **(b)** signing in with a personal account against an app registered as single-tenant — recreate with personal accounts allowed (step 1.3) |
+| `AADSTS65001: consent required` | You closed the browser before approving consent, or your tenant admin needs to grant the delegated Graph permissions. Re-run `--login` and click **Accept** (work/school accounts may need an admin to consent first) |
+| Graph returns `InvalidAuthenticationToken` after weeks of inactivity | Refresh token expired. Delete the cache file (`~/.outlook-mcp/cache.json` by default, or `$OUTLOOK_MCP_CACHE_DIR/cache.json` if you've overridden it) and re-run `--login` |
 | Want to verify the cache without an MCP client | `outlook-mcp --login` — silent path prints "silent acquisition succeeded"; otherwise it'll re-prompt |
 
 ## Limitations / non-goals (v1)
