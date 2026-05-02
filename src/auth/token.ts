@@ -41,8 +41,9 @@ export class TokenProvider {
           return silent.accessToken;
         }
       } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
         process.stderr.write(
-          `[outlook-mcp] silent token acquisition failed (${(err as Error).message}); falling back to device code\n`,
+          `[outlook-mcp] silent token acquisition failed (${reason}); falling back to device code\n`,
         );
       }
     }

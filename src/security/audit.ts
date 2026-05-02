@@ -56,6 +56,7 @@ export function appendAudit(entry: AuditEntry): void {
     appendFileSync(path, line + "\n", { mode: 0o600 });
     ensurePerms(path);
   } catch (err) {
-    process.stderr.write(`[outlook-mcp] failed to write audit log: ${(err as Error).message}\n`);
+    const reason = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[outlook-mcp] failed to write audit log: ${reason}\n`);
   }
 }

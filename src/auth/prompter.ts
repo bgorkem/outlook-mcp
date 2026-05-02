@@ -34,8 +34,9 @@ export class McpElicitationPrompter implements Prompter {
         elicitationId: randomUUID(),
       });
     } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
       process.stderr.write(
-        `[outlook-mcp] elicitation failed (${(err as Error).message}); ` +
+        `[outlook-mcp] elicitation failed (${reason}); ` +
           `falling back to stderr prompt:\n${prompt.message}\n`,
       );
     }
