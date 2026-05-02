@@ -41,16 +41,23 @@ Local stdio MCP server that lets Claude (or any MCP client) read and act on a **
 
 ## Setup
 
-### 1. Register an Azure AD app (one-time)
+### 1. Register an Azure AD app (one-time, ~3 min)
 
 1. <https://portal.azure.com> → **App registrations** → **New registration**
-2. **Supported account types:** *Accounts in any organizational directory and personal Microsoft accounts*
-3. Skip the Redirect URI field
-4. After creation: **Authentication** → *Advanced settings* → **Allow public client flows: Yes** → Save
-5. **API permissions** → *Add a permission* → Microsoft Graph → *Delegated permissions* → add `Mail.Read`, `Mail.ReadWrite`, `offline_access`
-6. Copy the **Application (client) ID** from the Overview page
+2. **Name:** `outlook-mcp` (or anything you like)
+3. **Supported account types:** **Personal Microsoft accounts only** (or *Accounts in any organizational directory and personal Microsoft accounts* if you also need work/school sign-in)
+4. **Redirect URI:** leave blank
+5. Click **Register**
 
-No client secret is needed — this is a public client using device-code flow.
+Then, in your new app:
+
+6. **Manage → Authentication** → scroll to *Advanced settings* → toggle **Allow public client flows: Yes** → **Save**
+7. **Manage → API permissions** → **+ Add a permission** → **Microsoft Graph** → **Delegated permissions** → check **`Mail.Read`**, **`Mail.ReadWrite`**, **`offline_access`** → **Add permissions**
+8. From the **Overview** page, copy the **Application (client) ID** — you'll need it in step 3
+
+No client secret is needed (public client + device-code flow). Do **not** click "Grant admin consent" — personal accounts handle consent at sign-in.
+
+> If you chose the multi-tenant option in step 3, also set `OUTLOOK_MCP_AUTHORITY=https://login.microsoftonline.com/common` later. Default authority targets personal accounts only.
 
 ### 2. Install
 
@@ -67,15 +74,38 @@ Or once published:
 npm install -g outlook-mcp
 ```
 
-### 3. First run (auth bootstrap)
+### 3. Sign in (one-time, takes ~30 seconds)
 
-Run the server once standalone to complete device-code sign-in:
+Run the binary with `--login` — this performs a one-shot device-code sign-in and exits. No MCP client needed yet.
 
 ```sh
-OUTLOOK_MCP_CLIENT_ID=<your-app-id> node dist/index.js
+OUTLOOK_MCP_CLIENT_ID=<your-app-id> node dist/index.js --login
 ```
 
-A device code and URL print to stderr. Open the URL, paste the code, sign in. Token cache lands at `~/.outlook-mcp/cache.json` (mode `0600`). Subsequent runs refresh silently.
+You'll see something like:
+
+```
+[outlook-mcp] acquiring token (silent first; device code if needed). Scopes: Mail.ReadWrite, offline_access
+
+[outlook-mcp] To sign in, use a web browser to open the page https://www.microsoft.com/link
+              and enter the code AB1C2D3E to authenticate.
+```
+
+1. Open the URL in any browser
+2. Paste the **8-character code**
+3. Sign in with your **Outlook.com / Hotmail / Live** account
+4. On the consent screen, approve the requested permissions
+
+When the browser shows "You can close this tab", the terminal completes with:
+
+```
+[outlook-mcp] sign-in complete. Token cache location: /Users/you/.outlook-mcp/cache.json
+[outlook-mcp] you can now wire this server to your MCP client.
+```
+
+The token cache (`~/.outlook-mcp/cache.json`, mode `0600`) holds a refresh token — subsequent runs acquire access tokens silently. Re-run `--login` any time you want to confirm the cache is healthy or refresh consent; it'll report "silent acquisition succeeded" if no interaction is needed.
+
+> **Globally installed?** If you used `npm install -g outlook-mcp`, replace `node dist/index.js --login` with just `outlook-mcp --login` throughout this guide.
 
 ### 4. Wire to your MCP client
 
@@ -114,6 +144,7 @@ claude mcp add outlook -e OUTLOOK_MCP_CLIENT_ID=<your-app-id> -- node /absolute/
 
 | CLI flag | Effect |
 |---|---|
+| `--login` | One-shot device-code sign-in, then exit. No MCP transport started. Use for first-time auth or to verify an existing cache |
 | `--read-only` | Register only read tools; request `Mail.Read` only |
 | `--enable-organize` | Additionally register move/mark/flag/folder tools |
 | `--help`, `--version` | Print and exit |
@@ -144,12 +175,23 @@ npm run typecheck
 node dist/index.js --help
 ```
 
-Manual end-to-end (after auth bootstrap):
+Manual end-to-end (after running `--login` once):
 
-1. With `npx @modelcontextprotocol/inspector dist/index.js` confirm the tool list contains read + draft tools and **no `send_*` tool**.
-2. Call `create_draft` to your own address; verify in Outlook web that the draft exists with correct fields and was **not sent**.
-3. With `--enable-organize`: create a test folder, move a message in, mark unread, flag, move back. Verify in Outlook web after each step.
-4. `tail -f ~/.outlook-mcp/audit.log` while operating to see structured records of each call.
+1. With `npx @modelcontextprotocol/inspector node dist/index.js` (set `OUTLOOK_MCP_CLIENT_ID` in env) confirm the tool list contains read + draft tools and **no `send_*` tool**.
+2. Call `list_messages` with `{ "folder": "inbox", "top": 10 }` to confirm Graph access works.
+3. Call `create_draft` to your own address; verify in Outlook web that the draft exists with correct fields and was **not sent**.
+4. With `--enable-organize`: create a test folder, move a message in, mark unread, flag, move back. Verify in Outlook web after each step.
+5. `tail -f ~/.outlook-mcp/audit.log` while operating to see structured records of each call.
+
+### Re-auth troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `OUTLOOK_MCP_CLIENT_ID env var is required` | Pass it via the `-e` flag in your MCP client config, or `export` it in the shell |
+| Browser says "We can't sign you in" or `AADSTS50020` | App registration's *Supported account types* didn't include personal accounts — re-do step 1.3 |
+| `AADSTS65001: consent required` | You closed the browser before approving consent. Re-run `--login` and click **Accept** |
+| Graph returns `InvalidAuthenticationToken` after weeks of inactivity | Refresh token expired. Delete `~/.outlook-mcp/cache.json` and re-run `--login` |
+| Want to verify the cache without an MCP client | `outlook-mcp --login` — silent path prints "silent acquisition succeeded"; otherwise it'll re-prompt |
 
 ## Limitations / non-goals (v1)
 
