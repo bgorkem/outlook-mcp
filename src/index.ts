@@ -81,14 +81,19 @@ async function runLogin(readOnly: boolean): Promise<void> {
   const scopes = resolveScopes(readOnly ? "read-only" : "read-write");
   const tokens = new TokenProvider({ pca, scopes });
   process.stderr.write(
-    `[outlook-mcp] requesting scopes: ${scopes.join(", ")}\n` +
-      `[outlook-mcp] watch this terminal for the device code...\n`,
+    `[outlook-mcp] acquiring token (silent first; device code if needed). Scopes: ${scopes.join(", ")}\n`,
   );
   await tokens.getAccessToken();
-  process.stderr.write(
-    `[outlook-mcp] sign-in complete. Token cache written to: ${cacheFilePath()}\n` +
-      `[outlook-mcp] you can now wire this server to your MCP client.\n`,
-  );
+  if (tokens.lastAcquisitionMethod === "silent") {
+    process.stderr.write(
+      `[outlook-mcp] silent acquisition succeeded — existing cache at ${cacheFilePath()} is valid.\n`,
+    );
+  } else {
+    process.stderr.write(
+      `[outlook-mcp] sign-in complete. Token cache location: ${cacheFilePath()}\n`,
+    );
+  }
+  process.stderr.write(`[outlook-mcp] you can now wire this server to your MCP client.\n`);
 }
 
 async function main(): Promise<void> {
