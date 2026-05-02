@@ -7,8 +7,11 @@ export interface TokenProviderOptions {
   scopes: string[];
 }
 
+export type AcquisitionMethod = "silent" | "device-code";
+
 export class TokenProvider {
   private inflight: Promise<string> | null = null;
+  lastAcquisitionMethod: AcquisitionMethod | null = null;
 
   constructor(private readonly opts: TokenProviderOptions) {}
 
@@ -28,7 +31,10 @@ export class TokenProvider {
       try {
         const account = accounts[0]!;
         const silent = await pca.acquireTokenSilent({ account, scopes });
-        if (silent?.accessToken) return silent.accessToken;
+        if (silent?.accessToken) {
+          this.lastAcquisitionMethod = "silent";
+          return silent.accessToken;
+        }
       } catch (err) {
         process.stderr.write(
           `[outlook-mcp] silent token acquisition failed (${(err as Error).message}); falling back to device code\n`,
@@ -46,6 +52,7 @@ export class TokenProvider {
     if (!result?.accessToken) {
       throw new AuthError("Device code flow returned no access token");
     }
+    this.lastAcquisitionMethod = "device-code";
     return result.accessToken;
   }
 }

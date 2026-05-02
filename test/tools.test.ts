@@ -140,6 +140,22 @@ describe("organize safety rails", () => {
   });
 });
 
+describe("structuredContent shape", () => {
+  it("wraps array results so MCP client accepts them", async () => {
+    const { client } = await buildHarness({
+      readOnly: true,
+      enableOrganize: false,
+      messages: { async listFolders() { return [{ id: "f1", displayName: "Inbox" } as any]; } },
+    });
+    const result = await client.callTool({ name: "list_folders", arguments: {} });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual({
+      items: [{ id: "f1", displayName: "Inbox" }],
+      count: 1,
+    });
+  });
+});
+
 describe("draft happy path", () => {
   it("create_draft returns a sendable summary including the webLink", async () => {
     const created = {
