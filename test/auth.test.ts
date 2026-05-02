@@ -4,6 +4,7 @@ import {
   McpElicitationPrompter,
   NotSupportedPrompter,
   parseMsalMessage,
+  type Prompter,
 } from "../src/auth/prompter.js";
 import { AuthRequiredError } from "../src/auth/errors.js";
 import { TokenProvider } from "../src/auth/token.js";
@@ -27,9 +28,10 @@ describe("parseMsalMessage", () => {
   });
 });
 
-describe("StderrPrompter", () => {
-  it("writes the MSAL message to stderr", async () => {
+describe("Prompter contracts", () => {
+  it("StderrPrompter declares supportsInteractiveAwait=true and writes to stderr", async () => {
     const prompter = new StderrPrompter();
+    expect(prompter.supportsInteractiveAwait).toBe(true);
     const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     await prompter.promptDeviceCode({
       url: "https://example/link",
@@ -38,47 +40,15 @@ describe("StderrPrompter", () => {
       expiresInSec: 900,
     });
     expect(spy).toHaveBeenCalledOnce();
-    const written = String(spy.mock.calls[0]?.[0]);
-    expect(written).toContain("ABC12345");
+    expect(String(spy.mock.calls[0]?.[0])).toContain("ABC12345");
     spy.mockRestore();
   });
-});
 
-describe("NotSupportedPrompter", () => {
-  it("throws AuthRequiredError that embeds the actual URL and code so the user can act from chat", async () => {
-    const prompter = new NotSupportedPrompter();
-    await expect(
-      prompter.promptDeviceCode({
-        url: "https://www.microsoft.com/link",
-        code: "AB1C2D3E",
-        message: "msal raw msg",
-        expiresInSec: 900,
-      }),
-    ).rejects.toBeInstanceOf(AuthRequiredError);
-
-    try {
-      await prompter.promptDeviceCode({
-        url: "https://www.microsoft.com/link",
-        code: "AB1C2D3E",
-        message: "m",
-        expiresInSec: 900,
-      });
-    } catch (e) {
-      const err = e as AuthRequiredError;
-      expect(err.message).toContain("https://www.microsoft.com/link");
-      expect(err.message).toContain("AB1C2D3E");
-      expect(err.message).toMatch(/sign[- ]in/i);
-      // still mention the --login fallback for terminal users
-      expect(err.message).toMatch(/--login/);
-    }
-  });
-});
-
-describe("McpElicitationPrompter", () => {
-  it("calls server.server.elicitInput with mode=url and the device-code URL", async () => {
+  it("McpElicitationPrompter declares supportsInteractiveAwait=true and elicits with mode=url", async () => {
     const elicitInput = vi.fn().mockResolvedValue({ action: "accept" });
     const fakeServer = { server: { elicitInput } } as any;
     const prompter = new McpElicitationPrompter(fakeServer);
+    expect(prompter.supportsInteractiveAwait).toBe(true);
     await prompter.promptDeviceCode({
       url: "https://www.microsoft.com/link",
       code: "AB1C2D3E",
@@ -93,70 +63,108 @@ describe("McpElicitationPrompter", () => {
     expect(arg.elicitationId).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-  it("does not throw when elicitation fails — falls back to stderr log", async () => {
+  it("McpElicitationPrompter swallows elicitation errors so polling can continue", async () => {
     const elicitInput = vi.fn().mockRejectedValue(new Error("client decline"));
-    const fakeServer = { server: { elicitInput } } as any;
-    const prompter = new McpElicitationPrompter(fakeServer);
+    const prompter = new McpElicitationPrompter({ server: { elicitInput } } as any);
     const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     await expect(
       prompter.promptDeviceCode({ url: "u", code: "c", message: "m", expiresInSec: 0 }),
     ).resolves.toBeUndefined();
     spy.mockRestore();
   });
+
+  it("NotSupportedPrompter declares supportsInteractiveAwait=false and is a no-op", async () => {
+    const prompter = new NotSupportedPrompter();
+    expect(prompter.supportsInteractiveAwait).toBe(false);
+    await expect(
+      prompter.promptDeviceCode({ url: "u", code: "c", message: "m", expiresInSec: 0 }),
+    ).resolves.toBeUndefined();
+  });
 });
 
-describe("TokenProvider", () => {
-  function fakePca(opts: {
-    cachedAccount?: boolean;
-    silentToken?: string | null;
-    deviceCodeMessage?: string;
-    deviceCodeToken?: string | null;
-    onCancel?: (req: any) => void;
-  }) {
-    return {
-      getTokenCache: () => ({
-        getAllAccounts: async () => (opts.cachedAccount ? [{ homeAccountId: "x" }] : []),
-      }),
-      acquireTokenSilent: async () =>
-        opts.silentToken ? { accessToken: opts.silentToken } : null,
-      acquireTokenByDeviceCode: async (req: any) => {
-        const message =
-          opts.deviceCodeMessage ??
-          "To sign in, use https://www.microsoft.com/link and enter the code AB1C2D3E to authenticate.";
-        // Simulate MSAL invoking the callback synchronously, then waiting one tick to "poll"
-        req.deviceCodeCallback({ message, expiresIn: 900 });
-        await new Promise((r) => setTimeout(r, 10));
-        if (req.cancel) {
-          opts.onCancel?.(req);
-          return null;
-        }
-        return opts.deviceCodeToken ? { accessToken: opts.deviceCodeToken } : null;
-      },
-    } as any;
-  }
+interface FakePcaOpts {
+  cachedAccount?: boolean;
+  silentToken?: string | null;
+  deviceCodeMessage?: string;
+  deviceCodeToken?: string | null;
+  /** Hold acquireTokenByDeviceCode until this resolves, simulating polling. */
+  pollingHoldTime?: number;
+  pollingError?: Error;
+}
 
-  it("uses silent acquisition when a cached account exists", async () => {
+function fakePca(opts: FakePcaOpts) {
+  return {
+    getTokenCache: () => ({
+      getAllAccounts: async () => (opts.cachedAccount ? [{ homeAccountId: "x" }] : []),
+    }),
+    acquireTokenSilent: async () =>
+      opts.silentToken ? { accessToken: opts.silentToken } : null,
+    acquireTokenByDeviceCode: async (req: any) => {
+      const message =
+        opts.deviceCodeMessage ??
+        "To sign in, use https://www.microsoft.com/link and enter the code AB1C2D3E to authenticate.";
+      // MSAL fires the callback shortly after starting
+      req.deviceCodeCallback({ message, expiresIn: 900 });
+      // Then "polls" — caller may opt into a longer wait to simulate user inaction
+      await new Promise((r) => setTimeout(r, opts.pollingHoldTime ?? 10));
+      if (opts.pollingError) throw opts.pollingError;
+      return opts.deviceCodeToken ? { accessToken: opts.deviceCodeToken } : null;
+    },
+  } as any;
+}
+
+const interactivePrompter = (spy: ReturnType<typeof vi.fn>): Prompter => ({
+  supportsInteractiveAwait: true,
+  promptDeviceCode: spy,
+});
+
+describe("TokenProvider — silent path", () => {
+  it("returns a silently-acquired token without invoking the prompter", async () => {
     const promptSpy = vi.fn();
     const tokens = new TokenProvider({
       pca: fakePca({ cachedAccount: true, silentToken: "silent-token" }),
       scopes: ["Mail.Read"],
-      prompter: { promptDeviceCode: promptSpy },
+      prompter: interactivePrompter(promptSpy),
     });
-    const token = await tokens.getAccessToken();
-    expect(token).toBe("silent-token");
+    expect(await tokens.getAccessToken()).toBe("silent-token");
     expect(tokens.lastAcquisitionMethod).toBe("silent");
     expect(promptSpy).not.toHaveBeenCalled();
   });
 
-  it("falls back to device code when no cached account; passes parsed prompt to prompter", async () => {
+  it("deduplicates concurrent silent acquisitions", async () => {
+    let calls = 0;
+    const pca = {
+      getTokenCache: () => ({ getAllAccounts: async () => [{ homeAccountId: "x" }] }),
+      acquireTokenSilent: async () => {
+        calls++;
+        return { accessToken: "silent-shared" };
+      },
+      acquireTokenByDeviceCode: async () => null,
+    } as any;
+    const tokens = new TokenProvider({
+      pca,
+      scopes: ["Mail.Read"],
+      prompter: interactivePrompter(vi.fn()),
+    });
+    const [a, b, c] = await Promise.all([
+      tokens.getAccessToken(),
+      tokens.getAccessToken(),
+      tokens.getAccessToken(),
+    ]);
+    expect([a, b, c]).toEqual(["silent-shared", "silent-shared", "silent-shared"]);
+    expect(calls).toBe(1);
+  });
+});
+
+describe("TokenProvider — interactive prompter path (StderrPrompter / elicitation)", () => {
+  it("falls back to device code, surfaces the prompt, and awaits the token", async () => {
     const promptSpy = vi.fn().mockResolvedValue(undefined);
     const tokens = new TokenProvider({
       pca: fakePca({ deviceCodeToken: "dc-token" }),
       scopes: ["Mail.Read"],
-      prompter: { promptDeviceCode: promptSpy },
+      prompter: interactivePrompter(promptSpy),
     });
-    const token = await tokens.getAccessToken();
-    expect(token).toBe("dc-token");
+    expect(await tokens.getAccessToken()).toBe("dc-token");
     expect(tokens.lastAcquisitionMethod).toBe("device-code");
     expect(promptSpy).toHaveBeenCalledOnce();
     const arg = promptSpy.mock.calls[0]?.[0];
@@ -164,36 +172,53 @@ describe("TokenProvider", () => {
     expect(arg.url).toBe("https://www.microsoft.com/link");
   });
 
-  it("cancels device-code polling and rethrows when prompter rejects", async () => {
-    const cancelSeen = vi.fn();
+  it("does not cancel polling if the prompter throws — MSAL still completes", async () => {
+    // The interactive path is fire-and-forget on the prompter; an exception
+    // from the prompter must not interrupt MSAL.
+    const promptSpy = vi.fn().mockRejectedValue(new Error("rendering failed"));
     const tokens = new TokenProvider({
-      pca: fakePca({ deviceCodeToken: "should-not-be-returned", onCancel: cancelSeen }),
+      pca: fakePca({ deviceCodeToken: "dc-token" }),
+      scopes: ["Mail.Read"],
+      prompter: interactivePrompter(promptSpy),
+    });
+    expect(await tokens.getAccessToken()).toBe("dc-token");
+  });
+});
+
+describe("TokenProvider — non-interactive (NotSupported) path with background polling", () => {
+  it("throws AuthRequiredError immediately with URL+code embedded so user can act from chat", async () => {
+    const tokens = new TokenProvider({
+      pca: fakePca({ pollingHoldTime: 1000, deviceCodeToken: "would-be-token" }),
       scopes: ["Mail.Read"],
       prompter: new NotSupportedPrompter(),
     });
-    await expect(tokens.getAccessToken()).rejects.toBeInstanceOf(AuthRequiredError);
-    expect(cancelSeen).toHaveBeenCalled();
+    let caught: AuthRequiredError | null = null;
+    try {
+      await tokens.getAccessToken();
+    } catch (e) {
+      caught = e as AuthRequiredError;
+    }
+    expect(caught).toBeInstanceOf(AuthRequiredError);
+    expect(caught!.message).toContain("https://www.microsoft.com/link");
+    expect(caught!.message).toContain("AB1C2D3E");
+    expect(caught!.message).toMatch(/sign[- ]in/i);
+    expect(caught!.message).toMatch(/background/i);
   });
 
-  it("propagates a real MSAL error (e.g., network failure) instead of swapping it for AuthRequiredError", async () => {
-    // If the prompter rejected AND MSAL then hits a real failure (network, invalid
-    // tenant, expired device code), users should see the actual MSAL error rather
-    // than our friendly auth-required message — losing the real diagnostic would
-    // make these failures impossible to debug.
+  it("a second call while polling is in progress reuses the SAME prompt (does not start a new code)", async () => {
+    let callbackInvocations = 0;
     const pca = {
       getTokenCache: () => ({ getAllAccounts: async () => [] }),
       acquireTokenSilent: async () => null,
       acquireTokenByDeviceCode: async (req: any) => {
+        callbackInvocations++;
         req.deviceCodeCallback({
-          message: "go to https://www.microsoft.com/link and enter ZZZZ9999",
+          message:
+            "To sign in, use https://www.microsoft.com/link and enter the code STABLE99 to authenticate.",
           expiresIn: 900,
         });
-        await new Promise((r) => setTimeout(r, 5));
-        // Realistic: prompter rejected and set cancel, but the next poll already
-        // crashed with a network error before MSAL noticed the cancel flag.
-        const err = new Error("fetch failed: ECONNRESET");
-        (err as any).errorCode = "network_error";
-        throw err;
+        await new Promise((r) => setTimeout(r, 200)); // simulate long polling
+        return null;
       },
     } as any;
 
@@ -202,27 +227,42 @@ describe("TokenProvider", () => {
       scopes: ["Mail.Read"],
       prompter: new NotSupportedPrompter(),
     });
-    await expect(tokens.getAccessToken()).rejects.toThrow(/ECONNRESET/);
+
+    // First call kicks off polling and throws
+    await expect(tokens.getAccessToken()).rejects.toBeInstanceOf(AuthRequiredError);
+    // Second call comes in BEFORE the simulated polling completes
+    let second: AuthRequiredError | null = null;
+    try {
+      await tokens.getAccessToken();
+    } catch (e) {
+      second = e as AuthRequiredError;
+    }
+    expect(second).toBeInstanceOf(AuthRequiredError);
+    expect(second!.message).toContain("STABLE99"); // same code, not a new one
+    expect(callbackInvocations).toBe(1); // only one device-code request was issued
   });
 
-  it("surfaces our AuthRequiredError even when MSAL throws device_code_polling_cancelled after cancel", async () => {
-    // Real MSAL behaviour: when request.cancel = true is set during polling, MSAL
-    // rejects acquireTokenByDeviceCode with a 'device_code_polling_cancelled' error
-    // rather than resolving null. The TokenProvider must catch that and rethrow our
-    // AuthRequiredError so the user sees the friendly message, not MSAL's raw error.
+  it("after background polling completes, the provider uses the silent path on next call", async () => {
+    let backgroundResolve: ((token: string | null) => void) | null = null;
+    let silentReady = false;
     const pca = {
-      getTokenCache: () => ({ getAllAccounts: async () => [] }),
-      acquireTokenSilent: async () => null,
+      getTokenCache: () => ({
+        getAllAccounts: async () => (silentReady ? [{ homeAccountId: "x" }] : []),
+      }),
+      acquireTokenSilent: async () =>
+        silentReady ? { accessToken: "silent-after-bg" } : null,
       acquireTokenByDeviceCode: async (req: any) => {
         req.deviceCodeCallback({
-          message: "go to https://www.microsoft.com/link and enter ZZZZ9999",
+          message:
+            "To sign in, use https://www.microsoft.com/link and enter the code RESOLVE12 to authenticate.",
           expiresIn: 900,
         });
-        await new Promise((r) => setTimeout(r, 5));
-        // Mimic MSAL: throw, do not return null, on cancellation
-        throw new Error(
-          "device_code_polling_cancelled: Caller has cancelled token endpoint polling",
-        );
+        return new Promise((resolve) => {
+          backgroundResolve = (token) => {
+            silentReady = true;
+            resolve(token ? { accessToken: token } : null);
+          };
+        });
       },
     } as any;
 
@@ -231,22 +271,87 @@ describe("TokenProvider", () => {
       scopes: ["Mail.Read"],
       prompter: new NotSupportedPrompter(),
     });
+
+    // First call: AuthRequiredError, background polling starts
     await expect(tokens.getAccessToken()).rejects.toBeInstanceOf(AuthRequiredError);
+
+    // Simulate the user completing sign-in in their browser
+    backgroundResolve!("bg-success-token");
+    // Let the background promise's .then/.finally settle
+    await new Promise((r) => setTimeout(r, 5));
+
+    // Second call: silent path now hits the populated cache
+    expect(await tokens.getAccessToken()).toBe("silent-after-bg");
   });
 
-  it("deduplicates concurrent first-time acquisitions (one prompt for N callers)", async () => {
-    const promptSpy = vi.fn().mockResolvedValue(undefined);
+  it("when MSAL rejects before deviceCodeCallback fires, the underlying error propagates instead of hanging", async () => {
+    // Realistic failure: invalid client id, network down, etc — MSAL throws immediately
+    // before ever firing the device-code callback. Without the reject path on promptReady,
+    // the await would hang forever waiting for a callback that will never come.
+    const pca = {
+      getTokenCache: () => ({ getAllAccounts: async () => [] }),
+      acquireTokenSilent: async () => null,
+      acquireTokenByDeviceCode: async () => {
+        throw new Error("invalid_client: AADSTS700016 application not found");
+      },
+    } as any;
+
     const tokens = new TokenProvider({
-      pca: fakePca({ deviceCodeToken: "shared-token" }),
+      pca,
       scopes: ["Mail.Read"],
-      prompter: { promptDeviceCode: promptSpy },
+      prompter: new NotSupportedPrompter(),
     });
-    const [a, b, c] = await Promise.all([
-      tokens.getAccessToken(),
-      tokens.getAccessToken(),
-      tokens.getAccessToken(),
-    ]);
-    expect([a, b, c]).toEqual(["shared-token", "shared-token", "shared-token"]);
-    expect(promptSpy).toHaveBeenCalledOnce();
+
+    // The exact error MSAL threw should propagate — NOT an AuthRequiredError, because
+    // we never got far enough to surface a URL+code, and not a hang either.
+    await expect(tokens.getAccessToken()).rejects.toThrow(/AADSTS700016/);
+  });
+
+  it("when background polling fails (e.g., user never signed in), a retry starts a fresh device-code flow", async () => {
+    let invocation = 0;
+    const codes = ["FIRSTCODE", "SECONDCODE"];
+    const pca = {
+      getTokenCache: () => ({ getAllAccounts: async () => [] }),
+      acquireTokenSilent: async () => null,
+      acquireTokenByDeviceCode: async (req: any) => {
+        const code = codes[invocation++] ?? "EXTRA";
+        req.deviceCodeCallback({
+          message: `Open https://www.microsoft.com/link and enter the code ${code} to authenticate.`,
+          expiresIn: 900,
+        });
+        // First polling attempt fails; second succeeds
+        if (invocation === 1) {
+          await new Promise((r) => setTimeout(r, 5));
+          throw new Error("expired_token");
+        }
+        return null;
+      },
+    } as any;
+
+    const tokens = new TokenProvider({
+      pca,
+      scopes: ["Mail.Read"],
+      prompter: new NotSupportedPrompter(),
+    });
+
+    let first: AuthRequiredError | null = null;
+    try {
+      await tokens.getAccessToken();
+    } catch (e) {
+      first = e as AuthRequiredError;
+    }
+    expect(first!.message).toContain("FIRSTCODE");
+
+    // Wait for background polling to fail and clear in-flight state
+    await new Promise((r) => setTimeout(r, 20));
+
+    let second: AuthRequiredError | null = null;
+    try {
+      await tokens.getAccessToken();
+    } catch (e) {
+      second = e as AuthRequiredError;
+    }
+    expect(second!.message).toContain("SECONDCODE");
+    expect(invocation).toBe(2); // a fresh flow was started after the first failed
   });
 });
