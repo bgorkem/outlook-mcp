@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -55,7 +55,7 @@ async function buildHarness(opts: {
 describe("tool wiring", () => {
   it("read-only mode exposes only read tools, no send/draft/organize", async () => {
     const { toolNames } = await buildHarness({ readOnly: true, enableOrganize: false });
-    expect(toolNames).toEqual(["get_message", "list_folders", "list_messages", "search_messages"]);
+    expect(toolNames).toEqual(["get_message", "list_attachments", "list_folders", "list_messages", "save_attachment", "search_messages"]);
     expect(toolNames.some((n) => n.includes("send"))).toBe(false);
     expect(toolNames.some((n) => n.includes("delete") && !n.includes("draft"))).toBe(false);
   });
@@ -180,5 +180,68 @@ describe("draft happy path", () => {
     const text = (result.content as any[]).map((c) => c.text).join("\n");
     expect(text).toContain("Draft saved");
     expect(text).toContain(created.webLink);
+  });
+});
+
+describe("attachment tools", () => {
+  it("saves a file attachment under the attachment dir with a sanitized name", async () => {
+    const { client } = await buildHarness({
+      readOnly: true,
+      enableOrganize: false,
+      messages: {
+        getAttachment: async () => ({
+          id: "att",
+          name: "../../evil/state ment.pdf",
+          contentType: "application/pdf",
+          isInline: false,
+          kind: "file",
+          contentBytes: Buffer.from("%PDF-1.4").toString("base64"),
+        }),
+      } as Partial<MessagesApi>,
+    });
+    const res: any = await client.callTool({
+      name: "save_attachment",
+      arguments: { messageId: "m", attachmentId: "att" },
+    });
+    expect(res.isError).toBeFalsy();
+    const dir = join(process.env.OUTLOOK_MCP_CACHE_DIR!, "attachments");
+    const { path, size } = res.structuredContent;
+    expect(path.startsWith(dir)).toBe(true);
+    expect(path).toMatch(/-state ment\.pdf$/);
+    expect(path).not.toContain("evil");
+    expect(size).toBe(8);
+    expect(readFileSync(path, "utf8")).toBe("%PDF-1.4");
+  });
+
+  it("refuses oversized attachments before decoding them", async () => {
+    const { client } = await buildHarness({
+      readOnly: true,
+      enableOrganize: false,
+      messages: {
+        getAttachment: async () => ({
+          id: "att",
+          name: "big.bin",
+          contentType: "application/octet-stream",
+          isInline: false,
+          kind: "file",
+          size: 26 * 1024 * 1024,
+          contentBytes: "QQ==",
+        }),
+      } as Partial<MessagesApi>,
+    });
+    const res: any = await client.callTool({
+      name: "save_attachment",
+      arguments: { messageId: "m", attachmentId: "att" },
+    });
+    expect(res.isError).toBe(true);
+    const text = (res.content as any[]).map((c) => c.text).join("\n");
+    expect(text).toMatch(/limit/i);
+  });
+
+  it("does not take a destination path from the caller", async () => {
+    const { client } = await buildHarness({ readOnly: true, enableOrganize: false });
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === "save_attachment")!;
+    expect(Object.keys(tool.inputSchema.properties ?? {}).sort()).toEqual(["attachmentId", "messageId"]);
   });
 });

@@ -27,6 +27,20 @@ export interface MailFolder {
   unreadItemCount?: number;
 }
 
+export interface AttachmentInfo {
+  id: string;
+  name: string;
+  contentType?: string;
+  size?: number;
+  isInline: boolean;
+  /** "file" attachments can be downloaded; "item" and "reference" ones carry no bytes. */
+  kind: "file" | "item" | "reference" | "unknown";
+}
+
+export interface AttachmentContent extends AttachmentInfo {
+  contentBytes: string;
+}
+
 const SELECT_LIST =
   "id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,isRead,hasAttachments,bodyPreview,webLink";
 
@@ -76,6 +90,25 @@ export class MessagesApi {
       query: { $select: SELECT_DETAIL },
     });
     return toDetail(data);
+  }
+
+  async listAttachments(messageId: string): Promise<AttachmentInfo[]> {
+    const data = await this.graph.request<{ value: any[] }>(
+      `/me/messages/${encodeURIComponent(messageId)}/attachments`,
+      { query: { $select: "id,name,contentType,size,isInline", $top: 50 } },
+    );
+    return (data.value ?? []).map(toAttachment);
+  }
+
+  async getAttachment(messageId: string, attachmentId: string): Promise<AttachmentContent> {
+    const data = await this.graph.request<any>(
+      `/me/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`,
+    );
+    const info = toAttachment(data);
+    if (info.kind !== "file" || typeof data.contentBytes !== "string") {
+      throw new Error(`Attachment "${info.name}" is a ${info.kind} attachment and has no file content to download.`);
+    }
+    return { ...info, contentBytes: data.contentBytes };
   }
 
   async moveMessage(id: string, destination: string): Promise<{ id: string }> {
@@ -219,6 +252,25 @@ function toDetail(m: any): MessageDetail {
     bcc: recipientsToEmails(m.bccRecipients),
     bodyContentType: contentType,
     body: m.body?.content ?? "",
+  };
+}
+
+function toAttachment(a: any): AttachmentInfo {
+  const type = String(a["@odata.type"] ?? "").toLowerCase();
+  const kind = type.endsWith("fileattachment")
+    ? "file"
+    : type.endsWith("itemattachment")
+      ? "item"
+      : type.endsWith("referenceattachment")
+        ? "reference"
+        : "unknown";
+  return {
+    id: a.id,
+    name: a.name ?? "",
+    contentType: a.contentType ?? undefined,
+    size: a.size,
+    isInline: !!a.isInline,
+    kind,
   };
 }
 

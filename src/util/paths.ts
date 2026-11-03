@@ -16,3 +16,10 @@ export function cacheFilePath(): string {
 export function auditLogPath(): string {
   return join(resolveCacheDir(), "audit.log");
 }
+
+export function resolveAttachmentDir(): string {
+  const fromEnv = process.env.OUTLOOK_MCP_ATTACHMENT_DIR?.trim();
+  const dir = fromEnv && fromEnv.length > 0 ? fromEnv : join(resolveCacheDir(), "attachments");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return dir;
+}
