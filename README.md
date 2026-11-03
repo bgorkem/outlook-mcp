@@ -19,6 +19,8 @@ Local stdio MCP server that lets Claude (or any MCP client) read and act on a **
 | `list_messages` | List recent messages, optionally restricted to a folder and unread-only |
 | `search_messages` | Full-text search via Graph `$search` |
 | `get_message` | Fetch one message; HTML stripped to text by default |
+| `list_attachments` | List a message's attachments |
+| `save_attachment` | Save a file attachment to `~/.outlook-mcp/attachments` (or `OUTLOOK_MCP_ATTACHMENT_DIR`) and return its path |
 
 ### Default mode adds (requires `Mail.ReadWrite`)
 | Tool | Description |
@@ -171,7 +173,7 @@ Manual end-to-end (after running `--login` once):
 
 ## Limitations / non-goals (v1)
 
-- Mail only — no calendar, contacts, or attachments.
+- Mail only — no calendar or contacts. Attachments can be listed and saved locally, but not added to drafts.
 - Single account.
 - HTML rendering on read is intentionally lossy (we want safe text, not pixel-perfect output).
 
